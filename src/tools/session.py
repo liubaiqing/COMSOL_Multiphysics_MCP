@@ -1,5 +1,7 @@
 """Session management tools for COMSOL MCP Server."""
 
+from datetime import datetime
+import threading
 from typing import Optional
 from mcp.server import Server
 from mcp.server.fastmcp import FastMCP
@@ -13,6 +15,9 @@ class SessionManager:
     _client: Optional[mph.Client] = None
     _models: dict[str, mph.Model] = {}
     _current_model: Optional[str] = None
+    _startup_thread: Optional[threading.Thread] = None
+    _startup_status: Optional[dict] = None
+    _startup_lock = threading.RLock()
     
     def __new__(cls):
         if cls._instance is None:
@@ -34,9 +39,29 @@ class SessionManager:
     @property
     def models(self) -> dict[str, mph.Model]:
         return self._models.copy()
+
+    def _startup_in_progress(self) -> bool:
+        return self._startup_thread is not None and self._startup_thread.is_alive()
+
+    def _start_client(self, cores: Optional[int] = None, version: Optional[str] = None) -> dict:
+        self._client = mph.Client(cores=cores, version=version)
+        return {
+            "success": True,
+            "version": self._client.version,
+            "cores": self._client.cores,
+            "standalone": self._client.standalone,
+        }
     
     def start(self, cores: Optional[int] = None, version: Optional[str] = None) -> dict:
         """Start a COMSOL client session."""
+        with self._startup_lock:
+            if self._startup_in_progress():
+                return {
+                    "success": False,
+                    "error": "COMSOL startup is already in progress. Use comsol_status to poll progress.",
+                    "startup": self._startup_status,
+                }
+
         if self._client is not None:
             try:
                 self._client.clear()
@@ -52,18 +77,79 @@ class SessionManager:
             except Exception as e:
                 return {"success": False, "error": f"Failed to clear existing session: {e}"}
         try:
-            self._client = mph.Client(cores=cores, version=version)
-            return {
-                "success": True,
-                "version": self._client.version,
-                "cores": self._client.cores,
-                "standalone": self._client.standalone,
-            }
+            return self._start_client(cores=cores, version=version)
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def start_async(self, cores: Optional[int] = None, version: Optional[str] = None) -> dict:
+        """Start a COMSOL client session in a background thread."""
+        with self._startup_lock:
+            if self._client is not None:
+                return {
+                    "success": True,
+                    "status": "connected",
+                    "version": self._client.version,
+                    "cores": self._client.cores,
+                    "standalone": self._client.standalone,
+                    "message": "COMSOL session already running.",
+                }
+            if self._startup_in_progress():
+                return {
+                    "success": True,
+                    "status": "starting",
+                    "message": "COMSOL startup is already in progress.",
+                    "startup": self._startup_status,
+                }
+
+            self._startup_status = {
+                "status": "starting",
+                "started_at": datetime.now().isoformat(timespec="seconds"),
+                "cores": cores,
+                "version": version,
+            }
+
+            def worker() -> None:
+                try:
+                    result = self._start_client(cores=cores, version=version)
+                    with self._startup_lock:
+                        self._startup_status = {
+                            "status": "connected",
+                            "started_at": self._startup_status.get("started_at") if self._startup_status else None,
+                            "completed_at": datetime.now().isoformat(timespec="seconds"),
+                            "result": result,
+                        }
+                except Exception as e:
+                    with self._startup_lock:
+                        self._client = None
+                        self._startup_status = {
+                            "status": "failed",
+                            "started_at": self._startup_status.get("started_at") if self._startup_status else None,
+                            "completed_at": datetime.now().isoformat(timespec="seconds"),
+                            "error": str(e),
+                        }
+
+            self._startup_thread = threading.Thread(
+                target=worker,
+                name="comsol-startup",
+                daemon=True,
+            )
+            self._startup_thread.start()
+            return {
+                "success": True,
+                "status": "starting",
+                "message": "COMSOL startup started in the background. Use comsol_status to poll progress.",
+                "startup": self._startup_status,
+            }
     
     def connect(self, port: int, host: str = "localhost") -> dict:
         """Connect to a remote COMSOL server."""
+        with self._startup_lock:
+            if self._startup_in_progress():
+                return {
+                    "success": False,
+                    "error": "COMSOL startup is already in progress. Wait for it to finish before connecting.",
+                    "startup": self._startup_status,
+                }
         if self._client is not None:
             return {
                 "success": False,
@@ -97,6 +183,12 @@ class SessionManager:
     def get_status(self) -> dict:
         """Get current session status."""
         if self._client is None:
+            if self._startup_status is not None:
+                return {
+                    "connected": False,
+                    "startup": self._startup_status,
+                    "message": "COMSOL startup is in progress." if self._startup_in_progress() else "No active COMSOL session.",
+                }
             return {
                 "connected": False,
                 "message": "No active COMSOL session."
@@ -117,6 +209,7 @@ class SessionManager:
             "standalone": self._client.standalone,
             "models": model_list,
             "current_model": self._current_model,
+            "startup": self._startup_status,
         }
     
     def add_model(self, model: mph.Model) -> str:
@@ -173,6 +266,23 @@ def register_session_tools(mcp: FastMCP) -> None:
             Session info including version and core count, or error message
         """
         return session_manager.start(cores=cores, version=version)
+
+    @mcp.tool()
+    def comsol_start_async(cores: Optional[int] = None, version: Optional[str] = None) -> dict:
+        """
+        Start a local COMSOL client session in the background.
+
+        This avoids MCP tool-call timeouts during slow COMSOL cold starts. Poll
+        `comsol_status` until it reports connected=True or startup.status="failed".
+
+        Args:
+            cores: Number of processor cores to use (default: all available)
+            version: COMSOL version to use, e.g., '6.3' (default: latest installed)
+
+        Returns:
+            Startup status and polling instructions.
+        """
+        return session_manager.start_async(cores=cores, version=version)
     
     @mcp.tool()
     def comsol_connect(port: int, host: str = "localhost") -> dict:

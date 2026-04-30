@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local/generated COMSOL model files can contain user data and machine-specific paths.
+*.mph
+
+# OS and editor metadata.
+.DS_Store
+Thumbs.db
+*.swp

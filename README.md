@@ -101,6 +101,7 @@ comsol_mcp/
 │   │   ├── model.py                 # Model CRUD + versioning
 │   │   ├── parameters.py            # Parameter management + sweeps
 │   │   ├── geometry.py              # Geometry creation (block/cylinder/sphere)
+│   │   ├── materials.py             # Material creation + property assignment
 │   │   ├── physics.py               # Physics interfaces + boundary conditions
 │   │   ├── mesh.py                  # Mesh generation
 │   │   ├── study.py                 # Study creation + solving (sync/async)
@@ -141,14 +142,18 @@ comsol_mcp/
 
 ## Available Tools (80+ total)
 
-### Session (4)
+### Session (5)
 
 | Tool | Description |
 |------|-------------|
 | `comsol_start` | Start local COMSOL client |
+| `comsol_start_async` | Start COMSOL in background |
 | `comsol_connect` | Connect to remote server |
 | `comsol_disconnect` | Clear session |
 | `comsol_status` | Get session info |
+
+Use `comsol_start_async(version="6.3")` for slow first launches, then poll
+`comsol_status` until `connected` is `true` or `startup.status` is `failed`.
 
 ### Model (9)
 
@@ -193,6 +198,12 @@ comsol_mcp/
 | `geometry_list_features` | List features |
 | `geometry_get_boundaries` | Get boundary numbers |
 
+### Materials (1)
+
+| Tool | Description |
+|------|-------------|
+| `material_create` | Create material and set properties |
+
 ### Physics (16)
 
 | Tool | Description |
@@ -213,6 +224,26 @@ comsol_mcp/
 | `physics_setup_heat_boundaries` | Configure heat boundaries |
 | `physics_interactive_setup_flow` | Interactive flow BC setup |
 | `physics_boundary_selection` | Generic boundary setup |
+
+### Creating Aluminum Material
+
+```python
+material_create(
+    material_name="Aluminum",
+    component_name="comp1",
+    properties={
+        "density": "2700[kg/m^3]",
+        "youngsmodulus": "70e9[Pa]",
+        "poissonsratio": "0.33",
+        "thermalconductivity": "237[W/(m*K)]",
+        "heatcapacity": "900[J/(kg*K)]",
+    },
+    domain_selection=[1],
+)
+```
+
+Property names are COMSOL material property keys written to the selected
+material property group, `def` by default.
 
 ### Mesh (3)
 

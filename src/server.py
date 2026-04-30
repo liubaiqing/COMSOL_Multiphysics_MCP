@@ -7,6 +7,7 @@ from .tools.session import register_session_tools
 from .tools.model import register_model_tools
 from .tools.parameters import register_parameter_tools
 from .tools.geometry import register_geometry_tools
+from .tools.materials import register_material_tools
 from .tools.physics import register_physics_tools
 from .tools.mesh import register_mesh_tools
 from .tools.study import register_study_tools
@@ -26,6 +27,7 @@ def register_all_tools() -> None:
     register_model_tools(mcp)
     register_parameter_tools(mcp)
     register_geometry_tools(mcp)
+    register_material_tools(mcp)
     register_physics_tools(mcp)
     register_mesh_tools(mcp)
     register_study_tools(mcp)
