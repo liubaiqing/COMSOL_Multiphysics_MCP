@@ -16,6 +16,62 @@ def _next_tag(existing, prefix: str) -> str:
     return f"{prefix}{index}"
 
 
+def _reset_default_view(model, component_name: str, stl_analysis: Optional[dict] = None) -> dict:
+    """Reset the component's default 3D view to a centered isometric view."""
+    try:
+        comp = model.java.component(component_name)
+        if comp is None:
+            return {"success": False, "error": f"Component '{component_name}' not found."}
+
+        view_tags = list(comp.view().tags())
+        view = comp.view("view1") if "view1" in view_tags else comp.view().create("view1", 3)
+        camera = view.camera()
+
+        center = [0.0, 0.0, 0.0]
+        max_dim = 1.0
+        if stl_analysis and stl_analysis.get("success"):
+            bbox = stl_analysis.get("bounding_box", {})
+            center = [float(v) for v in bbox.get("center", center)]
+            dimensions = [abs(float(v)) for v in bbox.get("dimensions", [])]
+            if dimensions:
+                max_dim = max(max(dimensions), 1.0)
+
+        position = [
+            center[0] - 4.7 * max_dim,
+            center[1] - 6.25 * max_dim,
+            center[2] + 4.7 * max_dim,
+        ]
+        orthoscale = 2.5 * max_dim
+
+        camera.set("projection", "perspective")
+        camera.set("target", [str(v) for v in center])
+        camera.set("rotationpoint", [str(v) for v in center])
+        camera.set("position", [str(v) for v in position])
+        camera.set("up", ["0.3086974", "0.4115966", "0.8574929"])
+        camera.set("orthoscale", str(orthoscale))
+        camera.set("viewscaletype", "none")
+        camera.set("autocontext", "isotropic")
+        camera.set("autoupdate", "off")
+
+        try:
+            axis = view.axis()
+            axis.set("viewscaletype", "none")
+            axis.set("autocontext", "isotropic")
+            axis.set("autoupdate", "off")
+        except Exception:
+            pass
+
+        return {
+            "success": True,
+            "view": view.tag(),
+            "target": center,
+            "position": position,
+            "orthoscale": orthoscale,
+        }
+    except Exception as exc:
+        return {"success": False, "error": f"Failed to reset view: {exc}"}
+
+
 def register_mesh_tools(mcp: FastMCP) -> None:
     """Register mesh tools with the MCP server."""
     
@@ -147,6 +203,7 @@ def register_mesh_tools(mcp: FastMCP) -> None:
         component_name: str = "comp1",
         feature_name: Optional[str] = None,
         model_name: Optional[str] = None,
+        reset_view: bool = True,
     ) -> dict:
         """
         Import an external mesh file, such as STL, into a COMSOL mesh sequence.
@@ -199,6 +256,12 @@ def register_mesh_tools(mcp: FastMCP) -> None:
             }
             if path.suffix.lower() == ".stl":
                 result["stl_analysis"] = analyze_binary_stl(path)
+            if reset_view:
+                result["view_reset"] = _reset_default_view(
+                    model,
+                    component_name,
+                    result.get("stl_analysis"),
+                )
             return result
         except Exception as e:
             return {"success": False, "error": f"Failed to import mesh: {str(e)}"}

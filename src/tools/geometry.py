@@ -105,6 +105,7 @@ def _import_file_as_mesh(
     component_name: str,
     mesh_name: Optional[str] = None,
     feature_name: Optional[str] = None,
+    reset_view: bool = True,
 ) -> dict:
     """Import a mesh file into a COMSOL mesh sequence."""
     path = Path(file_path)
@@ -139,7 +140,7 @@ def _import_file_as_mesh(
         if path.suffix.lower() == ".stl":
             analysis = analyze_binary_stl(path)
 
-        return {
+        result = {
             "success": True,
             "mesh": {
                 "name": target_mesh,
@@ -149,8 +150,70 @@ def _import_file_as_mesh(
             },
             "stl_analysis": analysis,
         }
+        if reset_view:
+            result["view_reset"] = _reset_default_view(model, component_name, analysis)
+        return result
     except Exception as exc:
         return {"success": False, "error": f"Failed to import mesh: {exc}"}
+
+
+def _reset_default_view(model, component_name: str, stl_analysis: Optional[dict] = None) -> dict:
+    """Reset the component's default 3D view to a COMSOL-like isometric fit."""
+    try:
+        comp = model.java.component(component_name)
+        if comp is None:
+            return {"success": False, "error": f"Component '{component_name}' not found."}
+
+        view_tags = list(comp.view().tags())
+        view = comp.view("view1") if "view1" in view_tags else comp.view().create("view1", 3)
+        camera = view.camera()
+
+        center = [0.0, 0.0, 0.0]
+        max_dim = 1.0
+        if stl_analysis and stl_analysis.get("success"):
+            bbox = stl_analysis.get("bounding_box", {})
+            center = [float(v) for v in bbox.get("center", center)]
+            dimensions = [abs(float(v)) for v in bbox.get("dimensions", [])]
+            if dimensions:
+                max_dim = max(max(dimensions), 1.0)
+
+        # COMSOL's default 3D orientation is an isometric view from roughly
+        # (-3, -4, 3). Scale it by model size so large imported STL meshes open
+        # centered and in frame.
+        position = [
+            center[0] - 4.7 * max_dim,
+            center[1] - 6.25 * max_dim,
+            center[2] + 4.7 * max_dim,
+        ]
+        orthoscale = 2.5 * max_dim
+
+        camera.set("projection", "perspective")
+        camera.set("target", [str(v) for v in center])
+        camera.set("rotationpoint", [str(v) for v in center])
+        camera.set("position", [str(v) for v in position])
+        camera.set("up", ["0.3086974", "0.4115966", "0.8574929"])
+        camera.set("orthoscale", str(orthoscale))
+        camera.set("viewscaletype", "none")
+        camera.set("autocontext", "isotropic")
+        camera.set("autoupdate", "off")
+
+        try:
+            axis = view.axis()
+            axis.set("viewscaletype", "none")
+            axis.set("autocontext", "isotropic")
+            axis.set("autoupdate", "off")
+        except Exception:
+            pass
+
+        return {
+            "success": True,
+            "view": view.tag(),
+            "target": center,
+            "position": position,
+            "orthoscale": orthoscale,
+        }
+    except Exception as exc:
+        return {"success": False, "error": f"Failed to reset view: {exc}"}
 
 
 def register_geometry_tools(mcp: FastMCP) -> None:
@@ -681,6 +744,7 @@ def register_geometry_tools(mcp: FastMCP) -> None:
         feature_name: Optional[str] = None,
         build: bool = True,
         fallback_to_mesh: bool = True,
+        reset_view: bool = True,
     ) -> dict:
         """
         Import geometry from a CAD file.
@@ -696,6 +760,7 @@ def register_geometry_tools(mcp: FastMCP) -> None:
             feature_name: Optional import feature tag
             build: Whether to build the geometry after import
             fallback_to_mesh: If geometry STL import fails, import as mesh
+            reset_view: Reset component view to a centered default 3D view after import
         
         Returns:
             Import operation info
@@ -711,7 +776,14 @@ def register_geometry_tools(mcp: FastMCP) -> None:
         mode = import_type.lower()
 
         if mode in {"mesh", "stl_mesh", "mesh_import"}:
-            return _import_file_as_mesh(model, file_path, component_name, mesh_name=None, feature_name=feature_name)
+            return _import_file_as_mesh(
+                model,
+                file_path,
+                component_name,
+                mesh_name=None,
+                feature_name=feature_name,
+                reset_view=reset_view,
+            )
 
         result = _import_file_as_geometry(
             model=model,
@@ -722,8 +794,12 @@ def register_geometry_tools(mcp: FastMCP) -> None:
             build=build,
         )
         if result["success"]:
+            analysis = None
             if path.suffix.lower() == ".stl":
-                result["stl_analysis"] = analyze_binary_stl(path)
+                analysis = analyze_binary_stl(path)
+                result["stl_analysis"] = analysis
+            if reset_view:
+                result["view_reset"] = _reset_default_view(model, component_name, analysis)
             return result
 
         should_fallback = (
@@ -740,6 +816,7 @@ def register_geometry_tools(mcp: FastMCP) -> None:
             component_name=component_name,
             mesh_name=None,
             feature_name=feature_name,
+            reset_view=reset_view,
         )
         if mesh_result["success"]:
             mesh_result["warning"] = (

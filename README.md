@@ -261,6 +261,8 @@ material property group, `def` by default.
 level MPh path. For STL files, if solid geometry import fails during repair or
 geometry build, the tool automatically falls back to importing the STL into a
 mesh sequence and returns the original geometry error plus `stl_analysis`.
+STL mesh imports preserve imported domains by default and reset the component's
+default 3D view so the model opens centered in an isometric COMSOL-style view.
 
 Use `stl_analyze(file_path)` before Boolean or CFD work. Non-manifold STL files
 can often be viewed and postprocessed as imported meshes, but they may need
