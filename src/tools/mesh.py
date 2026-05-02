@@ -170,6 +170,9 @@ def register_mesh_tools(mcp: FastMCP) -> None:
             if comp is None:
                 return {"success": False, "error": f"Component '{component_name}' not found."}
 
+            if not list(comp.geom().tags()):
+                comp.geom().create("geom1", 3)
+
             existing_meshes = list(comp.mesh().tags())
             target_mesh = mesh_name or _next_tag(existing_meshes, "mesh")
             mesh = comp.mesh(target_mesh) if target_mesh in existing_meshes else comp.mesh().create(target_mesh)

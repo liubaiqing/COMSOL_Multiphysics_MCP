@@ -285,6 +285,24 @@ class TestGeometryImportHelpers:
         assert result["success"] is False
         assert "imp_test" not in model.java.components["comp1"].geometries["geom1"].features.created
 
+    def test_mesh_import_creates_default_geometry_when_missing(self, tmp_path):
+        from src.tools.geometry import _import_file_as_mesh
+
+        mesh_file = tmp_path / "mesh.stl"
+        write_binary_tetra_stl(mesh_file)
+        model = FakeMeshImportModel()
+
+        result = _import_file_as_mesh(
+            model=model,
+            file_path=str(mesh_file),
+            component_name="comp1",
+        )
+
+        component = model.java.components["comp1"]
+        assert result["success"] is True
+        assert "geom1" in component.geometries.created
+        assert "mesh1" in component.meshes.created
+
 
 class FakePropertyGroup:
     def __init__(self):
@@ -412,6 +430,110 @@ class FakeJavaModelForImport:
 class FakeGeometryImportModel:
     def __init__(self):
         self.java = FakeJavaModelForImport()
+
+
+def write_binary_tetra_stl(path):
+    triangles = [
+        ((0, 0, -1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
+        ((0, -1, 0), (0, 0, 0), (0, 0, 1), (1, 0, 0)),
+        ((-1, 0, 0), (0, 0, 0), (0, 1, 0), (0, 0, 1)),
+        ((1, 1, 1), (1, 0, 0), (0, 0, 1), (0, 1, 0)),
+    ]
+    with path.open("wb") as handle:
+        handle.write(b"test tetra".ljust(80, b"\0"))
+        handle.write(struct.pack("<I", len(triangles)))
+        for normal, v1, v2, v3 in triangles:
+            handle.write(struct.pack("<12fH", *normal, *v1, *v2, *v3, 0))
+
+
+class FakeGeometryCollectionForMesh:
+    def __init__(self):
+        self.created = {}
+
+    def tags(self):
+        return list(self.created)
+
+    def create(self, tag, dimension):
+        self.created[tag] = {"dimension": dimension}
+        return self.created[tag]
+
+
+class FakeMeshImportFeature:
+    def __init__(self, tag):
+        self.tag = tag
+        self.properties = {}
+
+    def set(self, key, value):
+        self.properties[key] = value
+
+
+class FakeMeshFeatureCollection:
+    def __init__(self):
+        self.created = {}
+
+    def tags(self):
+        return list(self.created)
+
+    def create(self, tag, feature_type):
+        feature = FakeMeshImportFeature(tag)
+        feature.feature_type = feature_type
+        self.created[tag] = feature
+        return feature
+
+
+class FakeMeshSequence:
+    def __init__(self):
+        self.features = FakeMeshFeatureCollection()
+        self.ran = False
+
+    def feature(self):
+        return self.features
+
+    def run(self):
+        self.ran = True
+
+
+class FakeMeshCollectionForImport:
+    def __init__(self):
+        self.created = {}
+
+    def tags(self):
+        return list(self.created)
+
+    def create(self, tag):
+        mesh = FakeMeshSequence()
+        self.created[tag] = mesh
+        return mesh
+
+    def __call__(self, tag):
+        return self.created.get(tag)
+
+
+class FakeComponentForMeshImport:
+    def __init__(self):
+        self.geometries = FakeGeometryCollectionForMesh()
+        self.meshes = FakeMeshCollectionForImport()
+
+    def geom(self):
+        return self.geometries
+
+    def mesh(self, tag=None):
+        if tag is None:
+            return self.meshes
+        return self.meshes(tag)
+
+
+class FakeJavaModelForMeshImport:
+    def __init__(self):
+        self.components = {"comp1": FakeComponentForMeshImport()}
+
+    def component(self, name):
+        return self.components.get(name)
+
+
+class FakeMeshImportModel:
+    def __init__(self):
+        self.java = FakeJavaModelForMeshImport()
 
 
 class FakeClient:
