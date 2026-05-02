@@ -299,9 +299,13 @@ class TestGeometryImportHelpers:
         )
 
         component = model.java.components["comp1"]
+        import_feature = component.meshes.created["mesh1"].features.created["imp1"]
         assert result["success"] is True
         assert "geom1" in component.geometries.created
         assert "mesh1" in component.meshes.created
+        assert import_feature.properties["createdom"] == "on"
+        assert import_feature.properties["domelem"] == "on"
+        assert import_feature.properties["selectionstl"] == "on"
 
 
 class FakePropertyGroup:

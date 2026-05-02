@@ -127,6 +127,12 @@ def _import_file_as_mesh(
         import_tag = feature_name or _next_tag(existing_features, "imp")
         import_feature = mesh.feature().create(import_tag, "Import")
         import_feature.set("filename", str(path.absolute()))
+        if path.suffix.lower() == ".stl":
+            for prop, value in (("domelem", "on"), ("createdom", "on"), ("selectionstl", "on")):
+                try:
+                    import_feature.set(prop, value)
+                except Exception:
+                    pass
         mesh.run()
 
         analysis = None
