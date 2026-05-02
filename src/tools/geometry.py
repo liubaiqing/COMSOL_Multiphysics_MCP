@@ -62,9 +62,10 @@ def _import_file_as_geometry(
     if error:
         return {"success": False, "error": error}
 
+    existing = list(geom.feature().tags())
+    feat_name = feature_name or _next_tag(existing, "imp")
+
     try:
-        existing = list(geom.feature().tags())
-        feat_name = feature_name or _next_tag(existing, "imp")
         import_feature = geom.feature().create(feat_name, "Import")
         import_feature.set("filename", str(path.absolute()))
 
@@ -90,6 +91,11 @@ def _import_file_as_geometry(
             },
         }
     except Exception as exc:
+        try:
+            if feat_name in list(geom.feature().tags()):
+                geom.feature().remove(feat_name)
+        except Exception:
+            pass
         return {"success": False, "error": f"Failed to import geometry: {exc}"}
 
 

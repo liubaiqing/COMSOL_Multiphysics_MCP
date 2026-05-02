@@ -263,6 +263,29 @@ class TestSTLAnalysis:
         assert "binary STL" in result["error"] or "too small" in result["error"]
 
 
+class TestGeometryImportHelpers:
+    """Tests for geometry import cleanup paths without COMSOL."""
+
+    def test_failed_geometry_import_removes_created_feature(self, tmp_path):
+        from src.tools.geometry import _import_file_as_geometry
+
+        cad_file = tmp_path / "bad.stl"
+        cad_file.write_bytes(b"not a real stl")
+        model = FakeGeometryImportModel()
+
+        result = _import_file_as_geometry(
+            model=model,
+            file_path=str(cad_file),
+            geometry_name="geom1",
+            component_name="comp1",
+            feature_name="imp_test",
+            build=True,
+        )
+
+        assert result["success"] is False
+        assert "imp_test" not in model.java.components["comp1"].geometries["geom1"].features.created
+
+
 class FakePropertyGroup:
     def __init__(self):
         self.properties = {}
@@ -328,6 +351,67 @@ class FakeJavaModel:
 class FakeModel:
     def __init__(self):
         self.java = FakeJavaModel()
+
+
+class FakeImportFeature:
+    def __init__(self, tag):
+        self.tag = tag
+        self.properties = {}
+
+    def set(self, key, value):
+        self.properties[key] = value
+
+
+class FakeGeometryFeatureCollection:
+    def __init__(self):
+        self.created = {}
+
+    def tags(self):
+        return list(self.created)
+
+    def create(self, tag, feature_type):
+        feature = FakeImportFeature(tag)
+        feature.feature_type = feature_type
+        self.created[tag] = feature
+        return feature
+
+    def remove(self, tag):
+        self.created.pop(tag, None)
+
+
+class FakeGeometryForImport:
+    def __init__(self):
+        self.features = FakeGeometryFeatureCollection()
+
+    def feature(self):
+        return self.features
+
+    def tag(self):
+        return "geom1"
+
+    def run(self):
+        raise RuntimeError("build failed")
+
+
+class FakeComponentForImport:
+    def __init__(self):
+        self.geometries = {"geom1": FakeGeometryForImport()}
+
+    def geom(self, name):
+        return self.geometries.get(name)
+
+
+class FakeJavaModelForImport:
+    def __init__(self):
+        self.components = {"comp1": FakeComponentForImport()}
+
+    def component(self, name):
+        return self.components.get(name)
+
+
+class FakeGeometryImportModel:
+    def __init__(self):
+        self.java = FakeJavaModelForImport()
 
 
 class FakeClient:
