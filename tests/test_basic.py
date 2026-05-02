@@ -2,6 +2,7 @@
 
 import pytest
 from pathlib import Path
+import struct
 import threading
 
 
@@ -219,6 +220,47 @@ class TestMaterials:
         assert result["success"] is False
         assert "Invalid domain_selection" in result["error"]
         assert model.java.components["comp1"].materials.created == {}
+
+
+class TestSTLAnalysis:
+    """Tests for dependency-light STL diagnostics."""
+
+    def test_analyze_binary_stl_reports_closed_tetrahedron(self, tmp_path):
+        from src.utils.stl import analyze_binary_stl
+
+        stl_path = tmp_path / "tetra.stl"
+        triangles = [
+            ((0, 0, -1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
+            ((0, -1, 0), (0, 0, 0), (0, 0, 1), (1, 0, 0)),
+            ((-1, 0, 0), (0, 0, 0), (0, 1, 0), (0, 0, 1)),
+            ((1, 1, 1), (1, 0, 0), (0, 0, 1), (0, 1, 0)),
+        ]
+        with stl_path.open("wb") as handle:
+            handle.write(b"test tetra".ljust(80, b"\0"))
+            handle.write(struct.pack("<I", len(triangles)))
+            for normal, v1, v2, v3 in triangles:
+                handle.write(struct.pack("<12fH", *normal, *v1, *v2, *v3, 0))
+
+        result = analyze_binary_stl(stl_path)
+
+        assert result["success"] is True
+        assert result["triangle_count"] == 4
+        assert result["unique_vertices"] == 4
+        assert result["boundary_edges"] == 0
+        assert result["nonmanifold_edges"] == 0
+        assert result["is_edge_manifold"] is True
+        assert result["bounding_box"]["dimensions"] == [1.0, 1.0, 1.0]
+
+    def test_analyze_binary_stl_rejects_ascii_or_bad_size(self, tmp_path):
+        from src.utils.stl import analyze_binary_stl
+
+        stl_path = tmp_path / "bad.stl"
+        stl_path.write_text("solid bad\nendsolid bad\n")
+
+        result = analyze_binary_stl(stl_path)
+
+        assert result["success"] is False
+        assert "binary STL" in result["error"] or "too small" in result["error"]
 
 
 class FakePropertyGroup:

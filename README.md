@@ -179,7 +179,7 @@ Use `comsol_start_async(version="6.3")` for slow first launches, then poll
 | `param_sweep_setup` | Setup parametric sweep |
 | `param_description` | Get/set description |
 
-### Geometry (14)
+### Geometry (15)
 
 | Tool | Description |
 |------|-------------|
@@ -193,7 +193,8 @@ Use `comsol_start_async(version="6.3")` for slow first launches, then poll
 | `geometry_add_circle` | Add 2D circle |
 | `geometry_boolean_union` | Union objects |
 | `geometry_boolean_difference` | Subtract objects |
-| `geometry_import` | Import CAD file |
+| `geometry_import` | Import CAD/STL file, with STL mesh fallback |
+| `stl_analyze` | Inspect binary STL topology before import |
 | `geometry_build` | Build geometry |
 | `geometry_list_features` | List features |
 | `geometry_get_boundaries` | Get boundary numbers |
@@ -245,13 +246,26 @@ material_create(
 Property names are COMSOL material property keys written to the selected
 material property group, `def` by default.
 
-### Mesh (3)
+### Mesh (4)
 
 | Tool | Description |
 |------|-------------|
 | `mesh_list` | List mesh sequences |
 | `mesh_create` | Generate mesh |
 | `mesh_info` | Get mesh statistics |
+| `mesh_import` | Import external mesh file such as STL |
+
+### STL import notes
+
+`geometry_import` now uses the COMSOL Java API directly instead of the higher
+level MPh path. For STL files, if solid geometry import fails during repair or
+geometry build, the tool automatically falls back to importing the STL into a
+mesh sequence and returns the original geometry error plus `stl_analysis`.
+
+Use `stl_analyze(file_path)` before Boolean or CFD work. Non-manifold STL files
+can often be viewed and postprocessed as imported meshes, but they may need
+external repair before they can be converted into robust solids or subtracted
+from fluid domains.
 
 ### Study & Solving (8)
 

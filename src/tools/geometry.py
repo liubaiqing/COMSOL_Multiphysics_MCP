@@ -1,9 +1,11 @@
 """Geometry tools for COMSOL MCP Server."""
 
+from pathlib import Path
 from typing import Optional, Sequence
 from mcp.server.fastmcp import FastMCP
 
 from .session import session_manager
+from ..utils.stl import analyze_binary_stl
 
 
 def _get_geometry_node(model, geometry_name: Optional[str], component_name: str = "comp1"):
@@ -32,6 +34,108 @@ def _get_geometry_node(model, geometry_name: Optional[str], component_name: str 
         return geom, None
     except Exception as e:
         return None, f"Failed to get geometry: {str(e)}"
+
+
+def _next_tag(existing: Sequence[str], prefix: str) -> str:
+    """Return the first unused COMSOL tag for a model entity list."""
+    used = set(existing)
+    index = 1
+    while f"{prefix}{index}" in used:
+        index += 1
+    return f"{prefix}{index}"
+
+
+def _import_file_as_geometry(
+    model,
+    file_path: str,
+    geometry_name: Optional[str],
+    component_name: str,
+    feature_name: Optional[str],
+    build: bool,
+) -> dict:
+    """Import a CAD/STL file as a geometry feature via COMSOL's Java API."""
+    path = Path(file_path)
+    if not path.exists():
+        return {"success": False, "error": f"File not found: {file_path}"}
+
+    geom, error = _get_geometry_node(model, geometry_name, component_name)
+    if error:
+        return {"success": False, "error": error}
+
+    try:
+        existing = list(geom.feature().tags())
+        feat_name = feature_name or _next_tag(existing, "imp")
+        import_feature = geom.feature().create(feat_name, "Import")
+        import_feature.set("filename", str(path.absolute()))
+
+        if path.suffix.lower() == ".stl":
+            try:
+                import_feature.set("repair", "on")
+            except Exception:
+                pass
+
+        if build:
+            geom.run()
+
+        return {
+            "success": True,
+            "feature": {
+                "name": feat_name,
+                "type": "Import",
+                "geometry": geometry_name or geom.tag(),
+                "component": component_name,
+                "file": str(path.absolute()),
+                "mode": "geometry",
+                "built": build,
+            },
+        }
+    except Exception as exc:
+        return {"success": False, "error": f"Failed to import geometry: {exc}"}
+
+
+def _import_file_as_mesh(
+    model,
+    file_path: str,
+    component_name: str,
+    mesh_name: Optional[str] = None,
+    feature_name: Optional[str] = None,
+) -> dict:
+    """Import a mesh file into a COMSOL mesh sequence."""
+    path = Path(file_path)
+    if not path.exists():
+        return {"success": False, "error": f"File not found: {file_path}"}
+
+    try:
+        comp = model.java.component(component_name)
+        if comp is None:
+            return {"success": False, "error": f"Component '{component_name}' not found."}
+
+        existing_meshes = list(comp.mesh().tags())
+        target_mesh = mesh_name or _next_tag(existing_meshes, "mesh")
+        mesh = comp.mesh(target_mesh) if target_mesh in existing_meshes else comp.mesh().create(target_mesh)
+
+        existing_features = list(mesh.feature().tags())
+        import_tag = feature_name or _next_tag(existing_features, "imp")
+        import_feature = mesh.feature().create(import_tag, "Import")
+        import_feature.set("filename", str(path.absolute()))
+        mesh.run()
+
+        analysis = None
+        if path.suffix.lower() == ".stl":
+            analysis = analyze_binary_stl(path)
+
+        return {
+            "success": True,
+            "mesh": {
+                "name": target_mesh,
+                "feature": import_tag,
+                "file": str(path.absolute()),
+                "mode": "mesh",
+            },
+            "stl_analysis": analysis,
+        }
+    except Exception as exc:
+        return {"success": False, "error": f"Failed to import mesh: {exc}"}
 
 
 def register_geometry_tools(mcp: FastMCP) -> None:
@@ -557,7 +661,11 @@ def register_geometry_tools(mcp: FastMCP) -> None:
         file_path: str,
         geometry_name: Optional[str] = None,
         import_type: str = "CAD",
-        model_name: Optional[str] = None
+        model_name: Optional[str] = None,
+        component_name: str = "comp1",
+        feature_name: Optional[str] = None,
+        build: bool = True,
+        fallback_to_mesh: bool = True,
     ) -> dict:
         """
         Import geometry from a CAD file.
@@ -567,8 +675,12 @@ def register_geometry_tools(mcp: FastMCP) -> None:
         Args:
             file_path: Path to the CAD file
             geometry_name: Geometry sequence name
-            import_type: Import type (CAD, mesh, etc.)
+            import_type: Import type (CAD, geometry, mesh, auto, etc.)
             model_name: Model name (default: current model)
+            component_name: Component name (default: 'comp1')
+            feature_name: Optional import feature tag
+            build: Whether to build the geometry after import
+            fallback_to_mesh: If geometry STL import fails, import as mesh
         
         Returns:
             Import operation info
@@ -580,29 +692,58 @@ def register_geometry_tools(mcp: FastMCP) -> None:
                 "error": f"Model not found: {model_name or 'no current model'}"
             }
         
-        try:
-            geometries = model.geometries()
-            if not geometries:
-                return {"success": False, "error": "No geometry sequences found."}
-            
-            target_geom = geometry_name or geometries[0]
-            geom_node = model / "geometries" / target_geom
-            import_node = geom_node.create("Import")
-            
-            model.import_(import_node, file_path)
-            
-            return {
-                "success": True,
-                "feature": {
-                    "name": import_node.name() if hasattr(import_node, 'name') else "Import",
-                    "type": "Import",
-                    "geometry": target_geom,
-                    "file": file_path,
-                    "import_type": import_type,
-                }
-            }
-        except Exception as e:
-            return {"success": False, "error": f"Failed to import geometry: {str(e)}"}
+        path = Path(file_path)
+        mode = import_type.lower()
+
+        if mode in {"mesh", "stl_mesh", "mesh_import"}:
+            return _import_file_as_mesh(model, file_path, component_name, mesh_name=None, feature_name=feature_name)
+
+        result = _import_file_as_geometry(
+            model=model,
+            file_path=file_path,
+            geometry_name=geometry_name,
+            component_name=component_name,
+            feature_name=feature_name,
+            build=build,
+        )
+        if result["success"]:
+            if path.suffix.lower() == ".stl":
+                result["stl_analysis"] = analyze_binary_stl(path)
+            return result
+
+        should_fallback = (
+            fallback_to_mesh
+            and path.suffix.lower() == ".stl"
+            and mode in {"cad", "geometry", "auto", "stl"}
+        )
+        if not should_fallback:
+            return result
+
+        mesh_result = _import_file_as_mesh(
+            model=model,
+            file_path=file_path,
+            component_name=component_name,
+            mesh_name=None,
+            feature_name=feature_name,
+        )
+        if mesh_result["success"]:
+            mesh_result["warning"] = (
+                "Geometry import failed, so the STL was imported as a mesh. "
+                "This is typical for non-manifold or hard-to-repair STL files."
+            )
+            mesh_result["geometry_import_error"] = result["error"]
+        return mesh_result
+
+    @mcp.tool()
+    def stl_analyze(file_path: str) -> dict:
+        """
+        Analyze a binary STL file before importing it into COMSOL.
+
+        Reports triangle count, bounding box, surface area, signed volume,
+        boundary edges, and non-manifold edges. Non-manifold STL files often
+        need mesh import or external repair before Boolean/CFD workflows.
+        """
+        return analyze_binary_stl(file_path)
     
     @mcp.tool()
     def geometry_build(
